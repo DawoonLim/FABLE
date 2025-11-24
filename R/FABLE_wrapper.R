@@ -80,7 +80,7 @@ FABLEPosteriorSampler <- function(Y,
 FABLEPosteriorMean <- function(Y,
                                gamma0 = 1,
                                delta0sq = 1,
-                               maxProp = 0.5) {
+                               maxProp = 0.95) {
   
   tFABLEPostMean1 = proc.time()
   
