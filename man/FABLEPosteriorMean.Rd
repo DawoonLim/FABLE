@@ -4,7 +4,7 @@
 \alias{FABLEPosteriorMean}
 \title{FABLE-posterior mean function}
 \usage{
-FABLEPosteriorMean(Y, gamma0 = 1, delta0sq = 1, maxProp = 0.5)
+FABLEPosteriorMean(Y, gamma0 = 1, delta0sq = 1, maxProp = 0.95)
 }
 \arguments{
 \item{Y}{Data matrix}
