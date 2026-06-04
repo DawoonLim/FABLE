@@ -16,7 +16,11 @@ provideEstimationErrorsCase1 <- function(n,
                                          repIndex, 
                                          pi0,
                                          lambdasd,
-                                         save.dir = NA) {
+                                         save.dir = NA,
+                                         runMGSP = T,
+                                         runFABLE = T,
+                                         runROTATE = T,
+                                         runOthers = T) {
   
   
   #### Generate true Lambda and Sigma ####
@@ -58,90 +62,125 @@ provideEstimationErrorsCase1 <- function(n,
   
   #### MGSP ####
   
-  MGSPSamplingOutput = infinitefactor::linearMGSP(X = Y,
-                                                  nrun = MGSPnrun,
-                                                  burn = MGSPburn,
-                                                  output = c("covMean", "sigSamples"))
-  
-  avgESS = mean(coda::effectiveSize(t(MGSPSamplingOutput$sigmaSamps)))
-  write.csv(avgESS, file = paste0(dir.name, "ESS_MGSP_burn=", MGSPburn, "_nrun=", MGSPnrun, "_rep=", r, ".csv"))
-  
-  MGSPError = norm(MGSPSamplingOutput$covMean - Psi0, type = "2") / normPsi0
-  print(paste0("MGSP Error = ", MGSPError))
+  if(runMGSP) {
+    
+    MGSPSamplingOutput = infinitefactor::linearMGSP(X = Y,
+                                                    nrun = MGSPnrun,
+                                                    burn = MGSPburn,
+                                                    output = c("covMean", "sigSamples"))
+    
+    avgESS = mean(coda::effectiveSize(t(MGSPSamplingOutput$sigmaSamps)))
+    write.csv(avgESS, file = paste0(dir.name, "ESS_MGSP_burn=", MGSPburn, "_nrun=", MGSPnrun, "_rep=", r, ".csv"))
+    
+    MGSPError = norm(MGSPSamplingOutput$covMean - Psi0, type = "2") / normPsi0
+    print(paste0("MGSP Error = ", MGSPError))
+    
+  } else {
+    
+    MGSPError = NA
+    
+  }
   
   #### FABLE ####
   
-  svdY = svd(Y)
-  U_Y = svdY$u
-  V_Y = svdY$v
-  svalsY = svdY$d
-  
-  kMax = min(which(cumsum(svalsY) / sum(svalsY) >= 0.95))
-  
-  FABLEOutput = CPPFABLEPostMean(Y, gamma0, delta0sq, U_Y, V_Y, svalsY, kMax)
-  
-  FABLEError = norm(FABLEOutput$CovPostMean - Psi0, type = "2") / normPsi0
-  print(paste0("FABLE Error = ", FABLEError))
+  if(runFABLE) {
+    
+    svdY = svd(Y)
+    U_Y = svdY$u
+    V_Y = svdY$v
+    svalsY = svdY$d
+    S0 = 0.99
+    
+    kMax = min(which(cumsum(svalsY) / sum(svalsY) >= S0))
+    
+    FABLEOutput = CPPFABLEPostMean(Y, gamma0, delta0sq, U_Y, V_Y, svalsY, kMax)
+    
+    FABLEError = norm(FABLEOutput$CovPostMean - Psi0, type = "2") / normPsi0
+    print(paste0("FABLE Error = ", FABLEError))
+    
+  } else {
+    
+    FABLEError = NA
+    
+  }
   
   #### ROTATE WITH lambda0 as tuning parameter gradually increased
   
-  ROTATEOutput = autoSparse_paper(Y, 20)
-  ROTATEError = norm(ROTATEOutput - Psi0, type = "2") / normPsi0
-  print(paste0("ROTATE Error = ", ROTATEError))
+  if(runROTATE) {
+    
+    ROTATEOutput = autoSparse_paper(Y, 20)
+    ROTATEError = norm(ROTATEOutput - Psi0, type = "2") / normPsi0
+    print(paste0("ROTATE Error = ", ROTATEError))
+    
+  } else {
+    
+    ROTATEError = NA
+    
+  }
   
   #### Other competitors
   
-  # thresholdingEst : hard thresholding of Bickel & Levina, 2008
-  # scadEst : SCAD penalty (Fan and Li, 2001)
-  # linearShrinkLWEst : Ledoit and Wolf (2004)
-  # spcovEst : Bien and Tibshirani (2011)
-  
-  # need to scale data first
-  
-  YScaled = scale(Y, center = TRUE, scale = TRUE)
-  
-  vectorSds = apply(Y, 2, sd)
-  scaleMatrix = vectorSds %*% t(vectorSds)
-  
-  # thresholdingEst
-  
-  thresholdingResults <- cvCovEst(
-    dat = YScaled,
-    estimators = c(thresholdingEst),
-    estimator_params = list(
-      thresholdingEst = list(gamma = seq(0.05, 0.5, length.out = 10))),
-    cv_loss = cvMatrixFrobeniusLoss,
-    cv_scheme = "v_fold",
-    v_folds = 5
-  )
-  thresholdingResultsEstimate = thresholdingResults$estimate * scaleMatrix
-  
-  thresholdingError = norm(thresholdingResultsEstimate - Psi0, type = "2") / normPsi0
-  print(paste0("Hard Thresholding Error = ", thresholdingError))
-  
-  # scadEst
-  
-  scadResults <- cvCovEst(
-    dat = YScaled,
-    estimators = c(scadEst),
-    estimator_params = list(
-      scadEst        = list(lambda = seq(0.01, 0.5, length.out = 10))),
-    cv_loss = cvMatrixFrobeniusLoss,
-    cv_scheme = "v_fold",
-    v_folds = 5
-  )
-  scadResultsEstimate = scadResults$estimate * scaleMatrix
-  
-  scadError = norm(scadResultsEstimate - Psi0, type = "2") / normPsi0
-  print(paste0("SCAD Error = ", scadError))
-  
-  # linearShrinkLWEst
-  
-  linearShrinkLWEstResults <- linearShrinkLWEst(YScaled)
-  LSLWEResultsEstimate = linearShrinkLWEstResults * scaleMatrix
-  
-  linearShrinkLWEstError = norm(LSLWEResultsEstimate - Psi0, type = "2") / normPsi0
-  print(paste0("LSLWE Error = ", linearShrinkLWEstError))
+  if(runOthers) {
+    
+    # thresholdingEst : hard thresholding of Bickel & Levina, 2008
+    # scadEst : SCAD penalty (Fan and Li, 2001)
+    # linearShrinkLWEst : Ledoit and Wolf (2004)
+    # spcovEst : Bien and Tibshirani (2011)
+    
+    # need to scale data first
+    
+    YScaled = scale(Y, center = TRUE, scale = TRUE)
+    
+    vectorSds = apply(Y, 2, sd)
+    scaleMatrix = vectorSds %*% t(vectorSds)
+    
+    # thresholdingEst
+    
+    thresholdingResults <- cvCovEst(
+      dat = YScaled,
+      estimators = c(thresholdingEst),
+      estimator_params = list(
+        thresholdingEst = list(gamma = seq(0.05, 0.5, length.out = 10))),
+      cv_loss = cvMatrixFrobeniusLoss,
+      cv_scheme = "v_fold",
+      v_folds = 5
+    )
+    thresholdingResultsEstimate = thresholdingResults$estimate * scaleMatrix
+    
+    thresholdingError = norm(thresholdingResultsEstimate - Psi0, type = "2") / normPsi0
+    print(paste0("Hard Thresholding Error = ", thresholdingError))
+    
+    # scadEst
+    
+    scadResults <- cvCovEst(
+      dat = YScaled,
+      estimators = c(scadEst),
+      estimator_params = list(
+        scadEst        = list(lambda = seq(0.01, 0.5, length.out = 10))),
+      cv_loss = cvMatrixFrobeniusLoss,
+      cv_scheme = "v_fold",
+      v_folds = 5
+    )
+    scadResultsEstimate = scadResults$estimate * scaleMatrix
+    
+    scadError = norm(scadResultsEstimate - Psi0, type = "2") / normPsi0
+    print(paste0("SCAD Error = ", scadError))
+    
+    # linearShrinkLWEst
+    
+    linearShrinkLWEstResults <- linearShrinkLWEst(YScaled)
+    LSLWEResultsEstimate = linearShrinkLWEstResults * scaleMatrix
+    
+    linearShrinkLWEstError = norm(LSLWEResultsEstimate - Psi0, type = "2") / normPsi0
+    print(paste0("LSLWE Error = ", linearShrinkLWEstError))
+    
+  } else {
+    
+    thresholdingError = NA
+    scadError = NA
+    linearShrinkLWEstError = NA
+    
+  }
   
   #### Return output ####
   
@@ -169,21 +208,29 @@ provideEstimationErrorsCase1 <- function(n,
 #### Run the function ####
 
 R = 50
-n = 500
-p = 1000
+n = 100
+p = 500
 k = 10
-pi0 = 0.5
+pi0 = 0.85
 lambdasd = 0.5
+allErrors = matrix(0, nrow = R, ncol = 6)
 
 for(r in 1:R) {
   
-  provideEstimationErrors(n = n, 
-                          p, 
-                          k, 
-                          repIndex = r, 
-                          pi0,
-                          lambdasd,
-                          save.dir = NA)
+  allErrors[r,] = provideEstimationErrorsCase1(n = n, 
+                                               p, 
+                                               k, 
+                                               repIndex = r, 
+                                               pi0,
+                                               lambdasd,
+                                               save.dir = NA,
+                                               runMGSP = F,
+                                               runFABLE = T,
+                                               runROTATE = F,
+                                               runOthers = F)
   
 }
 
+colMeans(allErrors, na.rm=T)
+apply(allErrors, 2, quantile, 0.025, na.rm=T)
+apply(allErrors, 2, quantile, 0.975, na.rm=T)

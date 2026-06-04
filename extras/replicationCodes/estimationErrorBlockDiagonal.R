@@ -200,13 +200,13 @@ lambdasd = 0.5
 
 for(r in 1:R) {
   
-  provideEstimationErrors(n = n, 
-                          p, 
-                          k, 
-                          repIndex = r, 
-                          pi0,
-                          lambdasd,
-                          save.dir = NA)
+  provideEstimationErrorsCase2(n = n, 
+                               p, 
+                               k, 
+                               repIndex = r, 
+                               pi0,
+                               lambdasd,
+                               save.dir = NA)
   
 }
 
