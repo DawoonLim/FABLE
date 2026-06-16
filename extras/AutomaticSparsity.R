@@ -1,13 +1,13 @@
 source("extras/automatic_RockovaGeorge.R")
 
-autoSparse <- function(Y, lambda0) {
+autoSparse <- function(Y, KUpper = 20) { #only run for lambda0 = 1, 5, 10
   
   # INITIALIZATIONS
   
   n = nrow(Y)
   p = ncol(Y)
   
-  K <- 20
+  K <- KUpper
   G <- p
   
   startB <- matrix(rnorm(G*K),G,K)
@@ -19,9 +19,10 @@ autoSparse <- function(Y, lambda0) {
   
   start <- list(B=startB,sigma=rep(1,p),theta=rep(0.5,K))
   
-  result_5 <- FACTOR_ROTATE(Y,5,lambda1,start,K,epsilon,alpha,TRUE,TRUE,100,TRUE, plot = FALSE)
+  result_1 <- FACTOR_ROTATE(Y,1,lambda1,start,K,epsilon,alpha,TRUE,TRUE,100,TRUE, plot = FALSE)
   
-  #lambda0 <- 10
+  result_5 <- FACTOR_ROTATE(Y,5,lambda1,result_1,K,epsilon,alpha,TRUE,TRUE,100,TRUE, plot = FALSE)
+  
   result_10 <- FACTOR_ROTATE(Y,10,lambda1,result_5,K,epsilon,alpha,TRUE,TRUE,100,TRUE, plot = FALSE)
   
   #in older results, do till lambda0 = 10 and then require for general lambda0
@@ -32,17 +33,31 @@ autoSparse <- function(Y, lambda0) {
   
   # final result
   
-  result_lambda <- FACTOR_ROTATE(Y,lambda0,lambda1,result_10,K,epsilon,alpha,TRUE,TRUE,100,TRUE, plot = FALSE)
+  #result_lambda <- FACTOR_ROTATE(Y,lambda0,lambda1,result_10,K,epsilon,alpha,TRUE,TRUE,100,TRUE, plot = FALSE)
   #result_lambda <- result_30
   
   # Extract Estimates #
   
-  LLprime_ROTATE = result_lambda$B %*% t(result_lambda$B)
-  Sigma_ROTATE = diag(result_lambda$sigma)
+  LLprime_ROTATE_1 = result_1$B %*% t(result_1$B)
+  Sigma_ROTATE_1 = diag(result_1$sigma)
   
-  Psi_ROTATE = LLprime_ROTATE + Sigma_ROTATE
+  Psi_ROTATE_1 = LLprime_ROTATE_1 + Sigma_ROTATE_1
   
-  return(Psi_ROTATE)
+  LLprime_ROTATE_5 = result_5$B %*% t(result_5$B)
+  Sigma_ROTATE_5 = diag(result_5$sigma)
+  
+  Psi_ROTATE_5 = LLprime_ROTATE_5 + Sigma_ROTATE_5
+  
+  LLprime_ROTATE_10 = result_10$B %*% t(result_10$B)
+  Sigma_ROTATE_10 = diag(result_10$sigma)
+  
+  Psi_ROTATE_10 = LLprime_ROTATE_10 + Sigma_ROTATE_10
+  
+  allEstimates <- list("EstLambda1" = Psi_ROTATE_1,
+                       "EstLambda5" = Psi_ROTATE_5,
+                       "EstLambda10" = Psi_ROTATE_10)
+  
+  return(allEstimates)
   
 }
 
