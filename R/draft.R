@@ -180,6 +180,57 @@ algorithm1 <- function(
 }
 
 
+.one_replicate <- function(Y, Psi_true, sel, N0, k_true, verbose = FALSE) {
+  
+  p <- ncol(Y)
+  
+  # ── FABLE (CCFABLE_DirectSampler) ──────────────────────────────────
+  t_fable       <- proc.time()
+  fable_smp     <- CCFABLE_DirectSampler(Y, gamma0 = 1, delta0sq = 1, MC = N0)
+  fable_mean    <- FABLEPostmean(Y, gamma0 = 1, delta0sq = 1)
+  t_fable       <- (proc.time() - t_fable)["elapsed"]
+  
+  # ── Algorithm 1 ────────────────────────────────────────────────────
+  t_alg1 <- proc.time()
+  res1   <- algorithm1(Y, k = k_true, N0 = N0,
+                       store_samples = TRUE, verbose = verbose)
+  t_alg1 <- (proc.time() - t_alg1)["elapsed"]
+  
+  # ── Error ──────────────────────────────────────────────────────
+  err_fable <- norm(fable_mean       - Psi_true, "2") / norm(Psi_true, "2")
+  err_alg1  <- norm(res1$Psi_mean   - Psi_true, "2") / norm(Psi_true, "2")
+  
+  # ── Coverage: (u,v) CI ─────────────────────────────────────
+  # sel은 replicate 간 고정 (논문 Section 4.3 방식)
+  n_sel <- nrow(sel)
+  cov_f <- cov_a <- wid_f <- wid_a <- numeric(n_sel)
+  
+  for (i in seq_len(n_sel)) {
+    u <- sel[i, 1]; v <- sel[i, 2]
+    truth <- Psi_true[u, v]
+    
+    # FABLE CI
+    ci_f     <- quantile(fable_smp[, u, v], c(0.025, 0.975))
+    cov_f[i] <- as.numeric(truth >= ci_f[1] & truth <= ci_f[2])
+    wid_f[i] <- ci_f[2] - ci_f[1]
+    
+    # Algorithm 1 CI
+    ci_a     <- quantile(res1$Psi_samples[, u, v], c(0.025, 0.975))
+    cov_a[i] <- as.numeric(truth >= ci_a[1] & truth <= ci_a[2])
+    wid_a[i] <- ci_a[2] - ci_a[1]
+  }
+  
+  list(
+    err_fable  = err_fable,  err_alg1  = err_alg1,
+    cov_fable  = cov_f,      cov_alg1  = cov_a,
+    wid_fable  = wid_f,      wid_alg1  = wid_a,
+    time_fable = t_fable,    time_alg1 = t_alg1,
+    S_hat_norm = norm(res1$S_hat, "F"),
+    V_post_diag = diag(res1$V_post)
+  )
+}
+
+
 # =============================================================================
 # simulation: Algorithm 1 vs FABLE_code.R (CCFABLE_DirectSampler / FABLEPostmean)
 # =============================================================================
@@ -187,178 +238,143 @@ algorithm1 <- function(
 #' @param n             # of observation
 #' @param p             # of variable
 #' @param k_true        # of latent variable
+#' @param R             replicate  (default: 100)
 #' @param N0            the number of sample
 #' @param n_pairs       Coverage  (u,v) 
 #' @param seed          reproducibility
 
 run_simulation <- function(
-    n = 150, p = 100, k_true = 3,
-    N0 = 1000, n_pairs = 50, seed = 42
+    n       = 150,
+    p       = 100,
+    k_true  = 3,
+    R       = 100,
+    N0      = 500,
+    n_pairs = 100,
+    seed    = 42
 ) {
-  set.seed(seed)
-  cat("=== simulation: n =", n, ", p =", p, ", k =", k_true, "===\n\n")
-  
-  Lambda0   <- matrix(rnorm(p * k_true), p, k_true)
-  F0        <- matrix(rnorm(n * k_true), n, k_true)
-  sigma0_sq <- runif(p, 0.5, 2)
-  E         <- matrix(rnorm(n * p) * rep(sqrt(sigma0_sq), each = n), n, p)
-  Y         <- scale(F0 %*% t(Lambda0) + E, center = TRUE, scale = FALSE)
-  
-  Psi_true <- Lambda0 %*% t(Lambda0) + diag(sigma0_sq, p)
-  
-  # ------------------------------------------------------------------
-  # FABLE_code.R : CCFABLE_DirectSampler + FABLEPostmean
-  # ------------------------------------------------------------------
-  cat("── FABLE...\n")
   if (!exists("CCFABLE_DirectSampler"))
     stop("run source('FABLE_code.R')")
   
-  t_fable <- proc.time()
-  # coverage computation
-  fable_samples <- CCFABLE_DirectSampler(Y, gamma0 = 1, delta0sq = 1, MC = N0)
-  # posterior mean
-  fable_mean    <- FABLEPostmean(Y, gamma0 = 1, delta0sq = 1)
-  t_fable <- (proc.time() - t_fable)["elapsed"]
+  cat("=== Replicated simulation ===\n")
+  cat("    n =", n, "| p =", p, "| k =", k_true,
+      "| R =", R, "| N0 =", N0, "\n\n")
   
   # ------------------------------------------------------------------
-  # Algorithm 1
+  # (Λ₀, Σ₀): fixed
   # ------------------------------------------------------------------
-  cat("── Algorithm 1...\n")
-  t_alg1 <- proc.time()
-  res1   <- algorithm1(Y, k = k_true, N0 = N0,
-                       store_samples = TRUE, verbose = TRUE)
-  t_alg1 <- (proc.time() - t_alg1)["elapsed"]
+  set.seed(seed)
+  Lambda0   <- matrix(rnorm(p * k_true), p, k_true)
+  sigma0_sq <- runif(p, 0.5, 2)
+  Psi_true  <- Lambda0 %*% t(Lambda0) + diag(sigma0_sq, p)
   
   # ------------------------------------------------------------------
-  # 2 norm difference
+  # (u,v) : (section 4.3: "held fixed across replicates")
   # ------------------------------------------------------------------
-  err_fable <- norm(fable_mean - Psi_true, "2") / norm(Psi_true, "2")
-  err_alg1  <- norm(res1$Psi_mean - Psi_true, "2") / norm(Psi_true, "2")
-  
-  cat("\n── relative spectral error ──\n")
-  cat("  FABLE (FABLEPostmean) :", round(err_fable, 4), "\n")
-  cat("  Algorithm 1            :", round(err_alg1,  4), "\n")
-  
-  cat("\n── computation time ──\n")
-  cat("  FABLE  :", round(t_fable, 2), "sec.\n")
-  cat("  Alg. 1 :", round(t_alg1,  2), "sec.\n")
-  
-  # ------------------------------------------------------------------
-  # Coverage (n_pairs)
-  # ------------------------------------------------------------------
-  set.seed(seed + 1)
   idx <- which(lower.tri(matrix(0, p, p), diag = TRUE), arr.ind = TRUE)
   sel <- idx[sample(nrow(idx), min(n_pairs, nrow(idx))), , drop = FALSE]
+  n_sel <- nrow(sel)
   
-  compute_coverage <- function(samples_array, Psi_true, sel, alpha = 0.05) {
-    cov_vec <- width_vec <- numeric(nrow(sel))
-    for (i in seq_len(nrow(sel))) {
-      u <- sel[i, 1]; v <- sel[i, 2]
-      smp <- samples_array[, u, v]
-      ci  <- quantile(smp, c(alpha / 2, 1 - alpha / 2))
-      cov_vec[i]   <- as.numeric(Psi_true[u, v] >= ci[1] & Psi_true[u, v] <= ci[2])
-      width_vec[i] <- ci[2] - ci[1]
-    }
-    list(coverage = mean(cov_vec), width = mean(width_vec))
+  cat("evaluate pairs:", n_sel, "/ overall pairs:", nrow(idx), "\n\n")
+  
+  # ------------------------------------------------------------------
+  # row = replicate, col = (u,v) 
+  # ------------------------------------------------------------------
+  mat_cov_f  <- matrix(NA, R, n_sel)   
+  mat_cov_a  <- matrix(NA, R, n_sel)  
+  mat_wid_f  <- matrix(NA, R, n_sel)   
+  mat_wid_a  <- matrix(NA, R, n_sel)
+  vec_err_f  <- numeric(R)              
+  vec_err_a  <- numeric(R)
+  vec_time_f <- numeric(R)
+  vec_time_a <- numeric(R)
+  
+  # ------------------------------------------------------------------
+  # Replicate 
+  # ------------------------------------------------------------------
+  for (r in seq_len(R)) {
+    cat(sprintf("  replicate %3d / %d\r", r, R))
+    
+    set.seed(seed + r)
+    F0 <- matrix(rnorm(n * k_true), n, k_true)
+    E  <- matrix(rnorm(n * p) * rep(sqrt(sigma0_sq), each = n), n, p)
+    Y  <- scale(F0 %*% t(Lambda0) + E, center = TRUE, scale = FALSE)
+    
+    res_r <- tryCatch(
+      .one_replicate(Y, Psi_true, sel, N0, k_true, verbose = FALSE),
+      error = function(e) {
+        message("\n  replicate ", r, " error: ", conditionMessage(e))
+        NULL
+      }
+    )
+    
+    if (is.null(res_r)) next   # skip an error
+    
+    mat_cov_f[r, ]  <- res_r$cov_fable
+    mat_cov_a[r, ]  <- res_r$cov_alg1
+    mat_wid_f[r, ]  <- res_r$wid_fable
+    mat_wid_a[r, ]  <- res_r$wid_alg1
+    vec_err_f[r]    <- res_r$err_fable
+    vec_err_a[r]    <- res_r$err_alg1
+    vec_time_f[r]   <- res_r$time_fable
+    vec_time_a[r]   <- res_r$time_alg1
+  }
+  cat("\n\n")
+  
+  # ------------------------------------------------------------------
+  # coverage_r = pairwise mean
+  # coverage = coverage_r mean ± 2.5%/97.5% quantile
+  # ------------------------------------------------------------------
+  cov_r_fable <- rowMeans(mat_cov_f, na.rm = TRUE)   # R-벡터
+  cov_r_alg1  <- rowMeans(mat_cov_a, na.rm = TRUE)
+  wid_r_fable <- rowMeans(mat_wid_f, na.rm = TRUE)
+  wid_r_alg1  <- rowMeans(mat_wid_a, na.rm = TRUE)
+  
+  summarize <- function(x) {
+    c(mean = mean(x, na.rm = TRUE),
+      lo   = unname(quantile(x, 0.025, na.rm = TRUE)),
+      hi   = unname(quantile(x, 0.975, na.rm = TRUE)))
   }
   
-  cv_fable <- compute_coverage(fable_samples, Psi_true, sel)
-  cv_alg1  <- compute_coverage(res1$Psi_samples, Psi_true, sel)
+  prt <- function(label, x, fmt = "%6.4f") {
+    s <- summarize(x)
+    cat(sprintf(paste0("%-32s ", fmt, "  [", fmt, " – ", fmt, "]\n"),
+                label, s["mean"], s["lo"], s["hi"]))
+  }
   
-  cat("\n── Coverage (95% CI, ", nrow(sel), "pairs) ──\n", sep = "")
-  cat("  FABLE (CC-FABLE, ρ=b̄) : coverage =", round(cv_fable$coverage, 3),
-      "| width =", round(cv_fable$width, 4), "\n")
-  cat("  Algorithm 1 (ρ=1)      : coverage =", round(cv_alg1$coverage, 3),
-      "| width =", round(cv_alg1$width, 4), "\n")
-
-
-  cat("\n── Algorithm 1 ──\n")
-  cat("  k:", res1$k, "/ τ²:", round(res1$tau2, 4), "\n")
-  cat("  ||Ŝ||_F =", round(norm(res1$S_hat, "F"), 4))
-  cat("  Var(f̃_i|a_i) :", round(diag(res1$V_post), 4), "\n")
+  cat("─────────────────────────────────────────────────────────\n")
+  cat(sprintf("%-32s %6s  [%6s – %6s]\n", "", "Mean", "2.5%", "97.5%"))
+  cat("─────────────────────────────────────────────────────────\n")
   
+  prt("L2 error FABLE",        vec_err_f)
+  prt("L2 error Algorithm 1",  vec_err_a)
+  cat("─────────────────────────────────────────────────────────\n")
+  prt("Coverage  FABLE (CC, rho=b-bar)", cov_r_fable, fmt = "%6.3f")
+  prt("Coverage  Algorithm 1 (rho=1)",   cov_r_alg1,  fmt = "%6.3f")
+  cat("─────────────────────────────────────────────────────────\n")
+  prt("Width  FABLE",       wid_r_fable)
+  prt("Width  Algorithm 1", wid_r_alg1)
+  cat("─────────────────────────────────────────────────────────\n")
+  cat(sprintf("%-32s %6.2fsec.\n", "time  FABLE  (mean)", mean(vec_time_f)))
+  cat(sprintf("%-32s %6.2fsec.\n", "time  Alg.1  (mean)", mean(vec_time_a)))
+  cat("─────────────────────────────────────────────────────────\n")
+  
+  # ------------------------------------------------------------------
+  # for additional analysis
+  # ------------------------------------------------------------------
   invisible(list(
-    fable_mean    = fable_mean,
-    fable_samples = fable_samples,
-    res_alg1      = res1,
-    Psi_true      = Psi_true,
-    err_fable     = err_fable,
-    err_alg1      = err_alg1,
-    cv_fable      = cv_fable,
-    cv_alg1       = cv_alg1
+    Psi_true     = Psi_true,
+    sel          = sel,
+    cov_r_fable  = cov_r_fable,
+    cov_r_alg1   = cov_r_alg1,
+    wid_r_fable  = wid_r_fable,
+    wid_r_alg1   = wid_r_alg1,
+    err_fable    = vec_err_f,
+    err_alg1     = vec_err_a,
+    mat_cov_fable = mat_cov_f,
+    mat_cov_alg1  = mat_cov_a
   ))
 }
 
 
 
-result <- run_simulation(n = 300, p = 270, k_true = 3, N0 = 1000, n_pairs = 50, seed = 1)
-
-# =============================================================================
-#result <- run_simulation(n = 200, p = 50, k_true = 3, N0 = 1000, n_pairs = 50, seed = 1)
-#── 추정 오차 (relative spectral error) ──
-#FABLE (FABLEPostmean) : 0.2074 
-#Algorithm 1            : 0.1901 
-
-#── 계산 시간 ──
-#FABLE  : 0.2 초
-#Alg. 1 : 0.12 초
-
-#── Coverage (95% CI, 50쌍) ──
-#FABLE (CC-FABLE, ρ=b̄) : coverage = 1 | width = 1.3043 
-#Algorithm 1 (ρ=1)      : coverage = 0.96 | width = 0.7275 
-
-
-# =============================================================================
-# result <- run_simulation(n = 50, p = 40, k_true = 3, N0 = 1000, n_pairs = 50, seed = 1)
-# ── 추정 오차 (relative spectral error) ──
-#FABLE (FABLEPostmean) : 0.3363 
-#Algorithm 1            : 0.3399 
-
-#── 계산 시간 ──
-#FABLE  : 0.13 초
-#Alg. 1 : 0.12 초
-
-#── Coverage (95% CI, 50쌍) ──
-#FABLE (CC-FABLE, ρ=b̄) : coverage = 1 | width = 3.5311 
-#Algorithm 1 (ρ=1)      : coverage = 0.98 | width = 1.4549 
-
-# =============================================================================
-# result <- run_simulation(n = 100, p = 90, k_true = 3, N0 = 1000, n_pairs = 50, seed = 1)
-#── 추정 오차 (relative spectral error) ──
-#FABLE (FABLEPostmean) : 0.1971 
-#Algorithm 1            : 0.1891 
-
-#── 계산 시간 ──
-#FABLE  : 0.65 초
-#Alg. 1 : 0.21 초
-
-#── Coverage (95% CI, 50쌍) ──
-#FABLE (CC-FABLE, ρ=b̄) : coverage = 1 | width = 2.3709 
-#Algorithm 1 (ρ=1)      : coverage = 0.98 | width = 1.0376 
-
-#── Algorithm 1 진단 ──
-#추정 k: 3 / 사용 τ²: 0.9434 
-# ||Ŝ||_F = 0.0242  (0에 가까울수록 p→∞ 가정 성립)
-#Var(f̃_i|a_i) 대각 원소: 0.0128 0.0123 0.0169 
-# =============================================================================
-# result <- run_simulation(n = 200, p = 180, k_true = 3, N0 = 1000, n_pairs = 50, seed = 1)
-# ── 추정 오차 (relative spectral error) ──
-
-# FABLE (FABLEPostmean) : 0.2 
-# Algorithm 1            : 0.1951 
-
-# ── 계산 시간 ──
-# FABLE  : 3.93 초
-# Alg. 1 : 0.54 초
-
-# ── Coverage (95% CI, 50쌍) ──
-# FABLE (CC-FABLE, ρ=b̄) : coverage = 1 | width = 1.7443 
-# Algorithm 1 (ρ=1)      : coverage = 0.9 | width = 0.7727 
-# =============================================================================
-
-
-# 3. p 변화에 따른 비교 (차원의 축복 vs moderate p)
-# ps <- c(20, 50, 100, 200, 500)
-# res_list <- lapply(ps, function(p) {
-#   run_simulation(n = 150, p = p, k_true = 3, N0 = 500)
-# })
+result <- run_simulation(n = 100, p = 90, k_true = 3, R = 100, N0 = 500, n_pairs = 100, seed = 1)
