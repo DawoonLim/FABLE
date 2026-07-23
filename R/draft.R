@@ -201,7 +201,6 @@ algorithm1 <- function(
   err_alg1  <- norm(res1$Psi_mean   - Psi_true, "2") / norm(Psi_true, "2")
   
   # ── Coverage: (u,v) CI ─────────────────────────────────────
-  # sel은 replicate 간 고정 (논문 Section 4.3 방식)
   n_sel <- nrow(sel)
   cov_f <- cov_a <- wid_f <- wid_a <- numeric(n_sel)
   
@@ -374,7 +373,6 @@ run_simulation <- function(
     mat_cov_alg1  = mat_cov_a
   ))
 }
-
 
 
 result <- run_simulation(n = 100, p = 90, k_true = 3, R = 100, N0 = 500, n_pairs = 100, seed = 1)
