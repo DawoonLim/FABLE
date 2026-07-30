@@ -184,11 +184,11 @@ algorithm1 <- function(
   
   p <- ncol(Y)
   
-  # ── FABLE (CCFABLE_DirectSampler) ──────────────────────────────────
-  t_fable       <- proc.time()
-  fable_smp     <- CCFABLE_DirectSampler(Y, gamma0 = 1, delta0sq = 1, MC = N0)
-  fable_mean    <- FABLEPostmean(Y, gamma0 = 1, delta0sq = 1)
-  t_fable       <- (proc.time() - t_fable)["elapsed"]
+  # ── FABLEPosteriorSampler / FABLEPosteriorMean (wrapper) ────────
+  t_fable   <- proc.time()
+  fable_smp  <- FABLEPosteriorSampler(Y, gamma0 = 1, delta0sq = 1, MC = N0)
+  fable_mean <- FABLEPosteriorMean(Y, gamma0 = 1, delta0sq = 1)$ FABLEPostMean
+  t_fable    <- (proc.time() - t_fable)["elapsed"]
   
   # ── Algorithm 1 ────────────────────────────────────────────────────
   t_alg1 <- proc.time()
@@ -209,7 +209,18 @@ algorithm1 <- function(
     truth <- Psi_true[u, v]
     
     # FABLE CI
-    ci_f     <- quantile(fable_smp[, u, v], c(0.025, 0.975))
+    # Armadillo column-major: seq(j, p*k, by=p)
+    idx_u <- seq(u, p * k_true, by = p)   # length k_est
+    idx_v <- seq(v, p * k_true, by = p)
+    
+    lambda_u <- fable_smp$CCFABLESamples$LambdaSamples[, idx_u, drop = FALSE]  # MC × k
+    lambda_v <- fable_smp$CCFABLESamples$LambdaSamples[, idx_v, drop = FALSE]  # MC × k
+    
+    # Ψ_{uv}^(m) = λ_u^{(m)T} λ_v^{(m)} + σ²_u^{(m)} · 1(u=v)
+    psi_uv_f <- rowSums(lambda_u * lambda_v) +
+      fable_smp$CCFABLESamples$SigmaSqSamples[, u] * (u == v)
+    
+    ci_f     <- quantile(psi_uv_f, c(0.025, 0.975))
     cov_f[i] <- as.numeric(truth >= ci_f[1] & truth <= ci_f[2])
     wid_f[i] <- ci_f[2] - ci_f[1]
     
@@ -243,136 +254,407 @@ algorithm1 <- function(
 #' @param seed          reproducibility
 
 run_simulation <- function(
-    n       = 150,
-    p       = 100,
-    k_true  = 3,
-    R       = 100,
-    N0      = 500,
+    n       = 500,
+    p       = 1000,
+    k_true  = 10,
+    pi0     = 0.5,   # spike-and-slab 
+    v0      = 0.5,   # slab sd  → slab variance = v0^2 = 0.25
+    R       = 100,    
+    N0      = 1000,
     n_pairs = 100,
-    seed    = 42
+    seed    = 1
 ) {
+  
   if (!exists("CCFABLE_DirectSampler"))
     stop("run source('FABLE_code.R')")
   
-  cat("=== Replicated simulation ===\n")
-  cat("    n =", n, "| p =", p, "| k =", k_true,
-      "| R =", R, "| N0 =", N0, "\n\n")
+  cat("=== Replicated simulation (FABLE paper setup) ===\n")
+  cat(sprintf("  n=%d | p=%d | k=%d | pi0=%.2f | v0=%.2f | R=%d | N0=%d\n\n",
+              n, p, k_true, pi0, v0, R, N0))
   
   # ------------------------------------------------------------------
-  # (Λ₀, Σ₀): fixed
+  # (Λ₀, Σ₀): fixed — 논문 Section 4.1
+  # Λ₀[j,l] iid~ π₀·δ₀ + (1-π₀)·N(0, v0²)
+  # σ²₀j    iid~ Uniform(0.5, 5)
   # ------------------------------------------------------------------
   set.seed(seed)
-  Lambda0   <- matrix(rnorm(p * k_true), p, k_true)
-  sigma0_sq <- runif(p, 0.5, 2)
-  Psi_true  <- Lambda0 %*% t(Lambda0) + diag(sigma0_sq, p)
+  
+  spike_mask <- matrix(runif(p * k_true) < pi0, p, k_true)
+  slab_draw  <- matrix(rnorm(p * k_true, mean = 0, sd = v0), p, k_true)
+  Lambda0    <- ifelse(spike_mask, 0, slab_draw)   # p × k
+  
+  sigma0_sq  <- runif(p, min = 0.5, max = 5)       
+  
+  Psi_true   <- tcrossprod(Lambda0) + diag(sigma0_sq, p)
+  
+  # 논문 식 Pav 확인
+  Rav <- k_true * (1 - pi0) * v0^2 / mean(sigma0_sq)
+  Pav <- Rav / (1 + Rav)
+  cat(sprintf("  Pav (proportion of variance explained) ≈ %.1f%%\n\n",
+              100 * Pav))
   
   # ------------------------------------------------------------------
-  # (u,v) : (section 4.3: "held fixed across replicates")
+  # (u,v)
   # ------------------------------------------------------------------
   idx <- which(lower.tri(matrix(0, p, p), diag = TRUE), arr.ind = TRUE)
   sel <- idx[sample(nrow(idx), min(n_pairs, nrow(idx))), , drop = FALSE]
   n_sel <- nrow(sel)
-  
-  cat("evaluate pairs:", n_sel, "/ overall pairs:", nrow(idx), "\n\n")
-  
-  # ------------------------------------------------------------------
-  # row = replicate, col = (u,v) 
-  # ------------------------------------------------------------------
-  mat_cov_f  <- matrix(NA, R, n_sel)   
-  mat_cov_a  <- matrix(NA, R, n_sel)  
-  mat_wid_f  <- matrix(NA, R, n_sel)   
+
+  mat_cov_f  <- matrix(NA, R, n_sel)
+  mat_cov_a  <- matrix(NA, R, n_sel)
+  mat_wid_f  <- matrix(NA, R, n_sel)
   mat_wid_a  <- matrix(NA, R, n_sel)
-  vec_err_f  <- numeric(R)              
+  vec_err_f  <- numeric(R)
   vec_err_a  <- numeric(R)
   vec_time_f <- numeric(R)
   vec_time_a <- numeric(R)
   
   # ------------------------------------------------------------------
-  # Replicate 
+  # Λ₀, Σ₀ fixed, Y re-generate
   # ------------------------------------------------------------------
   for (r in seq_len(R)) {
     cat(sprintf("  replicate %3d / %d\r", r, R))
-    
     set.seed(seed + r)
-    F0 <- matrix(rnorm(n * k_true), n, k_true)
+    
+    F0 <- matrix(rnorm(n * k_true), n, k_true)           # η_i ~ N(0, I_k)
     E  <- matrix(rnorm(n * p) * rep(sqrt(sigma0_sq), each = n), n, p)
     Y  <- scale(F0 %*% t(Lambda0) + E, center = TRUE, scale = FALSE)
     
+    #res_r <- tryCatch(
+    #  .one_replicate(Y, Psi_true, sel, N0, k_true, verbose = FALSE),
+    #  error = function(e) {
+    #    message("\n  replicate ", r, " error: ", conditionMessage(e)); NULL
+    #  }
+    #)
+    
     res_r <- tryCatch(
-      .one_replicate(Y, Psi_true, sel, N0, k_true, verbose = FALSE),
+      withCallingHandlers(
+        .one_replicate(Y, Psi_true, sel, N0, k_true, verbose = FALSE),
+        error = function(e) {
+          cat("\n── call stack ──\n")
+          calls <- sys.calls()
+          for (i in seq_along(calls)) cat(i, ":", deparse(calls[[i]])[1], "\n")
+          cat("────────────────\n")
+        }
+      ),
       error = function(e) {
-        message("\n  replicate ", r, " error: ", conditionMessage(e))
-        NULL
+        message("replicate ", r, " error: ", conditionMessage(e)); NULL
       }
     )
     
-    if (is.null(res_r)) next   # skip an error
+    
+    if (is.null(res_r)) next
     
     mat_cov_f[r, ]  <- res_r$cov_fable
     mat_cov_a[r, ]  <- res_r$cov_alg1
     mat_wid_f[r, ]  <- res_r$wid_fable
     mat_wid_a[r, ]  <- res_r$wid_alg1
-    vec_err_f[r]    <- res_r$err_fable
+    vec_err_f[r]    <- res_r$err_fable    # ||Ψ̂ - Ψ₀|| / ||Ψ₀||  (spectral)
     vec_err_a[r]    <- res_r$err_alg1
     vec_time_f[r]   <- res_r$time_fable
     vec_time_a[r]   <- res_r$time_alg1
   }
   cat("\n\n")
   
-  # ------------------------------------------------------------------
-  # coverage_r = pairwise mean
-  # coverage = coverage_r mean ± 2.5%/97.5% quantile
-  # ------------------------------------------------------------------
-  cov_r_fable <- rowMeans(mat_cov_f, na.rm = TRUE)   # R-벡터
-  cov_r_alg1  <- rowMeans(mat_cov_a, na.rm = TRUE)
-  wid_r_fable <- rowMeans(mat_wid_f, na.rm = TRUE)
-  wid_r_alg1  <- rowMeans(mat_wid_a, na.rm = TRUE)
-  
+
   summarize <- function(x) {
     c(mean = mean(x, na.rm = TRUE),
       lo   = unname(quantile(x, 0.025, na.rm = TRUE)),
       hi   = unname(quantile(x, 0.975, na.rm = TRUE)))
   }
-  
   prt <- function(label, x, fmt = "%6.4f") {
     s <- summarize(x)
-    cat(sprintf(paste0("%-32s ", fmt, "  [", fmt, " – ", fmt, "]\n"),
+    cat(sprintf(paste0("%-36s ", fmt, "  [", fmt, " – ", fmt, "]\n"),
                 label, s["mean"], s["lo"], s["hi"]))
   }
   
-  cat("─────────────────────────────────────────────────────────\n")
-  cat(sprintf("%-32s %6s  [%6s – %6s]\n", "", "Mean", "2.5%", "97.5%"))
-  cat("─────────────────────────────────────────────────────────\n")
+  cov_r_fable <- rowMeans(mat_cov_f, na.rm = TRUE)
+  cov_r_alg1  <- rowMeans(mat_cov_a, na.rm = TRUE)
+  wid_r_fable <- rowMeans(mat_wid_f, na.rm = TRUE)
+  wid_r_alg1  <- rowMeans(mat_wid_a, na.rm = TRUE)
   
-  prt("L2 error FABLE",        vec_err_f)
-  prt("L2 error Algorithm 1",  vec_err_a)
-  cat("─────────────────────────────────────────────────────────\n")
-  prt("Coverage  FABLE (CC, rho=b-bar)", cov_r_fable, fmt = "%6.3f")
-  prt("Coverage  Algorithm 1 (rho=1)",   cov_r_alg1,  fmt = "%6.3f")
-  cat("─────────────────────────────────────────────────────────\n")
-  prt("Width  FABLE",       wid_r_fable)
-  prt("Width  Algorithm 1", wid_r_alg1)
-  cat("─────────────────────────────────────────────────────────\n")
-  cat(sprintf("%-32s %6.2fsec.\n", "time  FABLE  (mean)", mean(vec_time_f)))
-  cat(sprintf("%-32s %6.2fsec.\n", "time  Alg.1  (mean)", mean(vec_time_a)))
-  cat("─────────────────────────────────────────────────────────\n")
+  cat("─────────────────────────────────────────────────────────────\n")
+  cat(sprintf("%-36s %6s  [%6s – %6s]\n", "", "Mean", "2.5%", "97.5%"))
+  cat("─────────────────────────────────────────────────────────────\n")
+  prt("Relative spectral error  FABLE",    vec_err_f)
+  prt("Relative spectral error  Algorithm1", vec_err_a)
+  cat("─────────────────────────────────────────────────────────────\n")
+  prt("Coverage FABLE (rho=b-bar)",  cov_r_fable, fmt = "%6.3f")
+  prt("Coverage Algorithm1 (rho=1)", cov_r_alg1,  fmt = "%6.3f")
+  cat("─────────────────────────────────────────────────────────────\n")
+  prt("Interval width  FABLE",     wid_r_fable)
+  prt("Interval width  Algorithm1", wid_r_alg1)
+  cat("─────────────────────────────────────────────────────────────\n")
+  cat(sprintf("%-36s %6.2f sec\n", "Runtime FABLE (mean)",      mean(vec_time_f)))
+  cat(sprintf("%-36s %6.2f sec\n", "Runtime Algorithm1 (mean)", mean(vec_time_a)))
+  cat("─────────────────────────────────────────────────────────────\n")
   
-  # ------------------------------------------------------------------
-  # for additional analysis
-  # ------------------------------------------------------------------
   invisible(list(
-    Psi_true     = Psi_true,
-    sel          = sel,
-    cov_r_fable  = cov_r_fable,
-    cov_r_alg1   = cov_r_alg1,
-    wid_r_fable  = wid_r_fable,
-    wid_r_alg1   = wid_r_alg1,
-    err_fable    = vec_err_f,
-    err_alg1     = vec_err_a,
-    mat_cov_fable = mat_cov_f,
-    mat_cov_alg1  = mat_cov_a
+    Psi_true     = Psi_true,    sel          = sel,
+    cov_r_fable  = cov_r_fable, cov_r_alg1   = cov_r_alg1,
+    wid_r_fable  = wid_r_fable, wid_r_alg1   = wid_r_alg1,
+    err_fable    = vec_err_f,   err_alg1     = vec_err_a,
+    mat_cov_fable = mat_cov_f,  mat_cov_alg1 = mat_cov_a
   ))
 }
 
 
-result <- run_simulation(n = 100, p = 90, k_true = 3, R = 100, N0 = 500, n_pairs = 100, seed = 1)
+result <- run_simulation(n = 100, p = 90, k_true = 10,
+                         pi0 = 0.5, v0 = 0.5,
+                         R = 100, N0 = 1000, seed = 1)
+
+
+
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------
+# True covariance
+# n = 500, 1000 & p = 500, 1000, R = 100, MCMC = 1000
+# coverage of a randomly chosen 100 by 100 submatrix of Psi0
+# ------------------------------------------------------------------
+set.seed(1)
+n = 1000
+p = 500
+lambdasd = 0.5
+pi0 = 0.5
+k = 10
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) 
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+M = matrix(rnorm(n*k), nrow = n, ncol = k)
+E = matrix(rnorm(n*p), nrow = n, ncol = p)
+E = sweep(E, 2, sqrt(Sigma0), "*")
+
+Y = (M %*% t(Lambda)) + E
+
+# FABLEPostMean = FABLEPosteriorMean(Y, gamma0 = 1, delta0sq = 1, maxProp = 0.95)
+# FABLESamples = FABLEPosteriorSampler(Y, gamma0 = 1, delta0sq = 1, maxProp = 0.95, MC = 1000)
+
+
+
+
+
+# If tausq is infinity, then tausq inverse would be ignored.
+algorithm1_oracle <- function(Y, Lambda0, Sigma0, k,
+                         gamma0 = 1, delta0_sq = 1, rho2 = 1, seed = 1) {
+  set.seed(seed)
+  n <- nrow(Y); p <- ncol(Y)
+  
+  # tilde F
+  LtSinv  <- t(Lambda0 / Sigma0)  # Lamdba0^t %*% Sigma inv
+  A0      <- diag(k) + LtSinv %*% Lambda0  #  I_k + Lamdba0 %*% Sigma inv %*% Lamdba0
+  A0_inv  <- solve(A0)
+  M_mat   <- A0_inv %*% LtSinv  # mean of tilde f_i
+  
+  F_tilde <- matrix(0, n, k)
+  for (i in seq_len(n)) {
+    mu_i         <- M_mat %*% Y[i, ]
+    F_tilde[i, ] <- MASS::mvrnorm(1, mu = mu_i, Sigma = A0_inv)
+  }
+  
+  # Lamdba and sigmasq
+  K    <- solve(crossprod(F_tilde))
+  Fty  <- crossprod(F_tilde, Y)
+  Mu   <- K %*% Fty  # 
+  Kinv <- solve(K)
+  
+  gn    <- gamma0 + n
+  gn_d2 <- numeric(p)
+  for (j in seq_len(p)) {
+    gn_d2[j] <- gamma0 * delta0_sq + sum(Y[, j]^2) -
+      as.numeric(t(Mu[, j]) %*% Kinv %*% Mu[, j])
+  }
+  
+  sigma2 <- numeric(p)
+  for (j in seq_len(p)) {
+    sigma2[j] <- 1 / rgamma(1, shape = gn / 2, rate = gn_d2[j] / 2)
+  }
+  
+  Lambda_samp <- matrix(0, p, k)
+  for (j in seq_len(p)) {
+    Lambda_samp[j, ] <- MASS::mvrnorm(1, mu = Mu[, j], Sigma = rho2 * sigma2[j] * K)
+  }
+  
+  # aggregate
+  Psi <- tcrossprod(Lambda_samp) + diag(sigma2)
+  
+  list(F_tilde = F_tilde, Lambda_est = Lambda_samp, Sigma_est = diag(sigma2), Psi_est = Psi)
+}
+
+res <- algorithm1_oracle(Y = Y, Lambda0 = Lambda, Sigma0 = Sigma0, k = k)
+str(res)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# number of sample added
+algorithm1_oracle <- function(Y, Lambda0, Sigma0, k,
+                              gamma0 = 1, delta0_sq = 1, rho2 = 1,
+                              mcmc = 1, seed = 1) {
+  set.seed(seed)
+  n <- nrow(Y); p <- ncol(Y)
+  
+  samples <- vector("list", mcmc)
+  
+  for (s in seq_len(mcmc)) {
+    
+    # tilde F
+    LtSinv  <- t(Lambda0 / Sigma0)
+    A0      <- diag(k) + LtSinv %*% Lambda0
+    A0_inv  <- solve(A0)
+    M_mat   <- A0_inv %*% LtSinv
+    
+    F_tilde <- matrix(0, n, k)
+    for (i in seq_len(n)) {
+      mu_i         <- M_mat %*% Y[i, ]
+      F_tilde[i, ] <- MASS::mvrnorm(1, mu = mu_i, Sigma = A0_inv)
+    }
+    
+    # Lambda and sigmasq
+    K    <- solve(crossprod(F_tilde))
+    Fty  <- crossprod(F_tilde, Y)
+    Mu   <- K %*% Fty
+    Kinv <- solve(K)
+    
+    gn    <- gamma0 + n
+    gn_d2 <- numeric(p)
+    for (j in seq_len(p)) {
+      gn_d2[j] <- gamma0 * delta0_sq + sum(Y[, j]^2) -
+        as.numeric(t(Mu[, j]) %*% Kinv %*% Mu[, j])
+    }
+    
+    sigma2 <- numeric(p)
+    for (j in seq_len(p)) {
+      sigma2[j] <- 1 / rgamma(1, shape = gn / 2, rate = gn_d2[j] / 2)
+    }
+    
+    Lambda_samp <- matrix(0, p, k)
+    for (j in seq_len(p)) {
+      Lambda_samp[j, ] <- MASS::mvrnorm(1, mu = Mu[, j], Sigma = rho2 * sigma2[j] * K)
+    }
+    
+    # aggregate
+    Psi <- tcrossprod(Lambda_samp) + diag(sigma2)
+    
+    samples[[s]] <- list(F_tilde = F_tilde, Lambda_est = Lambda_samp,
+                         Sigma_est = diag(sigma2), Psi_est = Psi)
+  }
+  
+  samples
+}
+
+res <- algorithm1_oracle(Y = Y, Lambda0 = Lambda, Sigma0 = Sigma0, k = k, mcmc = 10)
+str(res[[1]]); str(res[[2]])
+
+
+aggregate_samples <- function(res) {
+  S <- length(res)
+  
+  F_tilde_mean  <- Reduce("+", lapply(res, `[[`, "F_tilde"))  / S
+  Lambda_mean   <- Reduce("+", lapply(res, `[[`, "Lambda_est")) / S
+  Sigma_mean    <- Reduce("+", lapply(res, `[[`, "Sigma_est")) / S
+  Psi_mean      <- Reduce("+", lapply(res, `[[`, "Psi_est"))  / S
+  
+  list(F_tilde  = F_tilde_mean,
+       Lambda_est = Lambda_mean,
+       Sigma_est  = Sigma_mean,
+       Psi_est    = Psi_mean)
+}
+
+agg  <- aggregate_samples(res)
+str(agg)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# number of replication added
+run_simulation <- function(n, p, k, Lambda_true, Sigma0_true,
+                           rep = 100, mcmc = 1000,
+                           lambdasd = 1, pi0 = 0.5,
+                           gamma0 = 1, delta0_sq = 1, rho2 = 1,
+                           seed = 1) {
+  set.seed(seed)
+  
+  results <- vector("list", rep)
+  
+  for (b in seq_len(rep)) {
+    
+    # data generation
+    M <- matrix(rnorm(n * k), nrow = n, ncol = k)
+    E <- matrix(rnorm(n * p), nrow = n, ncol = p)
+    E <- sweep(E, 2, sqrt(Sigma0_true), "*")
+    Y <- (M %*% t(Lambda_true)) + E
+    
+    # MCMC samples
+    res <- algorithm1_oracle(Y        = Y,
+                             Lambda0  = Lambda_true,
+                             Sigma0   = Sigma0_true,
+                             k        = k,
+                             gamma0   = gamma0,
+                             delta0_sq = delta0_sq,
+                             rho2     = rho2,
+                             mcmc = mcmc,
+                             seed      = b)        # 
+    
+    # posterior mean
+    agg <- aggregate_samples(res)
+    
+    results[[b]] <- list(Y   = Y,
+                         agg = agg)
+  }
+  
+  results
+}
+
+sim <- run_simulation(n        = n,
+                      p        = p,
+                      k        = k,
+                      Lambda_true = Lambda,
+                      Sigma0_true = Sigma0,
+                      rep    = 10,
+                      mcmc = 10)
+
+# Check each rep. est.
+str(sim[[1]]$agg$Psi_est); str(sim[[2]]$agg$Psi_est); str(sim[[3]]$agg$Psi_est)
