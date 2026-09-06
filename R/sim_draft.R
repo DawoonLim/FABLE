@@ -369,7 +369,6 @@ for (r in 1:R) {
   # ------------------------------------------------------------------
   # algorithm1; rho  = sqrt(varInflation)  
   # ------------------------------------------------------------------
-# set.seed(2001 + r)
   res_alg1 <- algorithm1(
     Y         = Y,
     k         = kEst,
@@ -387,8 +386,8 @@ for (r in 1:R) {
   # F posterior comparison
   # ------------------------------------------------------------------
   # oracle result
-  LtSinv  <- t(Lambda0 / Sigma0)  # Lambda^t Sigma^{-1} = t(Lambda0) %*% solve(diag(Sigma0))
-  A0      <- diag(k) + LtSinv %*% Lambda0  #I_k + Lamdba^t Sigma^{-1} Lambda  
+  LtSinv  <- t(Lambda / Sigma0)  # Lambda^t Sigma^{-1} = t(Lambda0) %*% solve(diag(Sigma0))
+  A0      <- diag(k) + LtSinv %*% Lambda  #I_k + Lamdba^t Sigma^{-1} Lambda  
   A0_inv  <- solve(A0)
   M_mat   <- A0_inv %*% LtSinv # A^{-1} Lambda^t Sigma^{-1}
   
@@ -432,15 +431,15 @@ for (r in 1:R) {
   vdiff_frob_stor[r] <- norm(Vdiff, "F")  
   vdiff_rel_stor[r]  <- norm(Vdiff, "F") / norm(F_var_ora, "F") 
   
-  cat(sprintf(paste0(
-    "[Rep %d]\n",
-    "  F_mean diff | L1: %8.2f  L2: %8.2f  Max: %8.2f  Frob: %8.2f\n",
-    "  F_var  diff | L1: %8.2f  L2: %8.2f  Max: %8.2f  Frob: %8.2f\n"
-  ),
-  r,
-  mdiff_L1_stor[r], mdiff_L2_stor[r], mdiff_max_stor[r], mdiff_frob_stor[r],
-  vdiff_L1_stor[r], vdiff_L2_stor[r], vdiff_max_stor[r], vdiff_frob_stor[r]
-  ))
+  #cat(sprintf(paste0(
+  #  "[Rep %d]\n",
+  #  "  F_mean diff | L1: %8.2f  L2: %8.2f  Max: %8.2f  Frob: %8.2f\n",
+  #  "  F_var  diff | L1: %8.2f  L2: %8.2f  Max: %8.2f  Frob: %8.2f\n"
+  #),
+  #r,
+  #mdiff_L1_stor[r], mdiff_L2_stor[r], mdiff_max_stor[r], mdiff_frob_stor[r],
+  #vdiff_L1_stor[r], vdiff_L2_stor[r], vdiff_max_stor[r], vdiff_frob_stor[r]
+  #))
   
   
   # ------------------------------------------------------------------
@@ -506,7 +505,7 @@ summarize_simulation <- function(covStor, widthStor,
                                  R, n, p) { 
   fmt <- function(x) {
     q <- quantile(x, probs = c(0.025, 0.975))
-    sprintf("%.4f [%.4f, %.4f]", mean(x), q[1], q[2])
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
   }
   
   methods <- list(
@@ -532,23 +531,33 @@ summarize_simulation(covStor, widthStor,
 
 
 cat("\n========================================================================\n")
-cat("  Algorithm1 vs Oracle — posterior comparison (mean over R reps)\n")
+cat("  Algorithm1 vs Oracle — posterior comparison (mean ± sd over R reps)\n")
 cat("========================================================================\n")
-cat(sprintf("  %-22s  %8s  %8s  %8s  %8s  %8s\n",
+cat(sprintf("  %-22s  %-22s  %-22s  %-22s  %-22s  %-22s\n",
             "Metric", "L1", "L2", "Max", "Frob", "Rel(Frob)"))
 cat("------------------------------------------------------------------------\n")
-cat(sprintf("  %-22s  %8.4f  %8.4f  %8.4f  %8.4f  %8s\n",
+
+fmt2 <- function(m, s) sprintf("%8.4f (%6.4f)", m, s)
+
+cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             "F_mean diff (n×k)",
-            mean(mdiff_L1_stor[1:R]), mean(mdiff_L2_stor[1:R]),
-            mean(mdiff_max_stor[1:R]), mean(mdiff_frob_stor[1:R]), "—"))
-cat(sprintf("  %-22s  %8.4f  %8.4f  %8.4f  %8.4f  %8.4f\n",
+            fmt2(mean(mdiff_L1_stor[1:R]),   sd(mdiff_L1_stor[1:R])),
+            fmt2(mean(mdiff_L2_stor[1:R]),   sd(mdiff_L2_stor[1:R])),
+            fmt2(mean(mdiff_max_stor[1:R]),  sd(mdiff_max_stor[1:R])),
+            fmt2(mean(mdiff_frob_stor[1:R]), sd(mdiff_frob_stor[1:R])),
+            "—"))
+cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             "Gram diff (n×n)",
-            mean(gram_L1_stor[1:R]),  mean(ggram_L2_stor[1:R]),
-            mean(gram_max_stor[1:R]), mean(gram_frob_stor[1:R]),
-            mean(gram_rel_stor[1:R])))
-cat(sprintf("  %-22s  %8.4f  %8.4f  %8.4f  %8.4f  %8.4f\n",
+            fmt2(mean(gram_L1_stor[1:R]),    sd(gram_L1_stor[1:R])),
+            fmt2(mean(ggram_L2_stor[1:R]),   sd(ggram_L2_stor[1:R])),
+            fmt2(mean(gram_max_stor[1:R]),   sd(gram_max_stor[1:R])),
+            fmt2(mean(gram_frob_stor[1:R]),  sd(gram_frob_stor[1:R])),
+            fmt2(mean(gram_rel_stor[1:R]),   sd(gram_rel_stor[1:R]))))
+cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             "F_var diff (k×k)",
-            mean(vdiff_L1_stor[1:R]), mean(vdiff_L2_stor[1:R]),
-            mean(vdiff_max_stor[1:R]), mean(vdiff_frob_stor[1:R]),
-            mean(vdiff_rel_stor[1:R])))
+            fmt2(mean(vdiff_L1_stor[1:R]),   sd(vdiff_L1_stor[1:R])),
+            fmt2(mean(vdiff_L2_stor[1:R]),   sd(vdiff_L2_stor[1:R])),
+            fmt2(mean(vdiff_max_stor[1:R]),  sd(vdiff_max_stor[1:R])),
+            fmt2(mean(vdiff_frob_stor[1:R]), sd(vdiff_frob_stor[1:R])),
+            fmt2(mean(vdiff_rel_stor[1:R]),  sd(vdiff_rel_stor[1:R]))))
 cat("========================================================================\n")
