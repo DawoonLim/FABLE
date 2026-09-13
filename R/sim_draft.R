@@ -1,6 +1,7 @@
 # =============================================================
 # ===== algorithm1 vs algorithm1_oracle vs FABLE ==============
 # =============================================================
+# caffeinate -d
 Rcpp::sourceCpp("src/updated-FABLE-functions.cpp") # revise; tausq_est = R_PosInf;
 library(MASS)
 
@@ -159,7 +160,7 @@ algorithm1 <- function(
 # True Sigma, True k
 # =============================================================================
 algorithm1_oracle <- function(Y, Lambda0, Sigma0, k,
-                              gamma0 = 1, delta0_sq = 1, rho2 = 1,
+                              gamma0 = 1, delta0_sq = 1, rhosq = 1,
                               mcmc = 1, seed = 1) {
   set.seed(seed)
   n <- nrow(Y); p <- ncol(Y)
@@ -200,7 +201,7 @@ algorithm1_oracle <- function(Y, Lambda0, Sigma0, k,
     
     Lambda_samp <- matrix(0, p, k)
     for (j in seq_len(p)) {
-      Lambda_samp[j, ] <- MASS::mvrnorm(1, mu = Mu[, j], Sigma = rho2 * sigma2[j] * K)
+      Lambda_samp[j, ] <- MASS::mvrnorm(1, mu = Mu[, j], Sigma = rhosq * sigma2[j] * K)
     }
     
     # aggregate
@@ -260,11 +261,11 @@ mdiff_L2_stor  <- numeric(R)
 mdiff_max_stor <- numeric(R)
 mdiff_frob_stor  <- numeric(R)
 
-gram_L1_stor   <- numeric(R)
-gram_frob_stor <- numeric(R)
-ggram_L2_stor   <- numeric(R)
-gram_max_stor  <- numeric(R)
-gram_rel_stor  <- numeric(R)
+gram_mdiff_L1_stor   <- numeric(R)
+gram_mdiff_frob_stor <- numeric(R)
+gram_mdiff_L2_stor   <- numeric(R)
+gram_mdiff_max_stor  <- numeric(R)
+gram_mdiff_rel_stor  <- numeric(R)
 
 # variance (k × k) 
 vdiff_L1_stor  <- numeric(R)
@@ -272,6 +273,13 @@ vdiff_L2_stor  <- numeric(R)
 vdiff_max_stor <- numeric(R)
 vdiff_frob_stor <- numeric(R) 
 vdiff_rel_stor <- numeric(R)
+
+gram_vdiff_L1_stor   <- numeric(R)
+gram_vdiff_frob_stor <- numeric(R)
+gram_vdiff_L2_stor   <- numeric(R)
+gram_vdiff_max_stor  <- numeric(R)
+gram_vdiff_rel_stor  <- numeric(R)
+
 
 # trace_alg1_stor <- numeric(R)
 #trace_ora_stor  <- numeric(R)
@@ -343,7 +351,7 @@ for (r in 1:R) {
                                   k         = kEst,
                                   gamma0    = gamma0,
                                   delta0_sq = delta0sq,
-                                  rho2      = varInflation,
+                                  rhosq      = varInflation,
                                   mcmc      = MC,
                                   seed      = 2001 + r)
   # res_oracle[[s]]$Psi_est : p × p
@@ -414,12 +422,11 @@ for (r in 1:R) {
   PP_gram <- tcrossprod(F_mean_alg1)  # P: posterior mean of algorithm1 
   QQ_gram <- tcrossprod(F_mean_ora)   # Q: posterior mean of oracle
   GG_diff <- PP_gram - QQ_gram
-  
-  gram_L1_stor[r]   <- norm(GG_diff, "1")
-  ggram_L2_stor[r]   <- norm(GG_diff, "2")
-  gram_max_stor[r]  <- norm(GG_diff, "M")
-  gram_frob_stor[r] <- norm(GG_diff, "F")
-  gram_rel_stor[r] <- norm(GG_diff, "F") / norm(QQ_gram, "F") # GG^t / QQ^t
+  gram_mdiff_L1_stor[r]   <- norm(GG_diff, "1")
+  gram_mdiff_L2_stor[r]   <- norm(GG_diff, "2")
+  gram_mdiff_max_stor[r]  <- norm(GG_diff, "M")
+  gram_mdiff_frob_stor[r] <- norm(GG_diff, "F")
+  gram_mdiff_rel_stor[r] <- norm(GG_diff, "F") / norm(QQ_gram, "F") # GG^t / QQ^t
   
   # posterior variance diff
   Vdiff <- F_var_alg1 - F_var_ora  
@@ -430,6 +437,16 @@ for (r in 1:R) {
   vdiff_max_stor[r]  <- norm(Vdiff, "M")          
   vdiff_frob_stor[r] <- norm(Vdiff, "F")  
   vdiff_rel_stor[r]  <- norm(Vdiff, "F") / norm(F_var_ora, "F") 
+  
+  # Gram matrix diff (Var %*% Var^t); (k × k)
+  VVt_alg1 <- F_var_alg1 %*% t(F_var_alg1)
+  VVt_ora <- F_var_ora %*% t(F_var_ora)
+  VVt_diff <- VVt_alg1 - VVt_ora
+  gram_vdiff_L1_stor[r]   <- norm(VVt_diff, "1")
+  gram_vdiff_L2_stor[r]   <- norm(VVt_diff, "2")
+  gram_vdiff_max_stor[r]  <- norm(VVt_diff, "M")
+  gram_vdiff_frob_stor[r] <- norm(VVt_diff, "F")
+  gram_vdiff_rel_stor[r] <- norm(VVt_diff, "F") / norm(VVt_ora, "F") 
   
   #cat(sprintf(paste0(
   #  "[Rep %d]\n",
@@ -548,11 +565,11 @@ cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             "—"))
 cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             "Gram diff (n×n)",
-            fmt2(mean(gram_L1_stor[1:R]),    sd(gram_L1_stor[1:R])),
-            fmt2(mean(ggram_L2_stor[1:R]),   sd(ggram_L2_stor[1:R])),
-            fmt2(mean(gram_max_stor[1:R]),   sd(gram_max_stor[1:R])),
-            fmt2(mean(gram_frob_stor[1:R]),  sd(gram_frob_stor[1:R])),
-            fmt2(mean(gram_rel_stor[1:R]),   sd(gram_rel_stor[1:R]))))
+            fmt2(mean(gram_mdiff_L1_stor[1:R]),    sd(gram_mdiff_L1_stor[1:R])),
+            fmt2(mean(gram_mdiff_L2_stor[1:R]),   sd(gram_mdiff_L2_stor[1:R])),
+            fmt2(mean(gram_mdiff_max_stor[1:R]),   sd(gram_mdiff_max_stor[1:R])),
+            fmt2(mean(gram_mdiff_frob_stor[1:R]),  sd(gram_mdiff_frob_stor[1:R])),
+            fmt2(mean(gram_mdiff_rel_stor[1:R]),   sd(gram_mdiff_rel_stor[1:R]))))
 cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             "F_var diff (k×k)",
             fmt2(mean(vdiff_L1_stor[1:R]),   sd(vdiff_L1_stor[1:R])),
@@ -560,4 +577,1027 @@ cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
             fmt2(mean(vdiff_max_stor[1:R]),  sd(vdiff_max_stor[1:R])),
             fmt2(mean(vdiff_frob_stor[1:R]), sd(vdiff_frob_stor[1:R])),
             fmt2(mean(vdiff_rel_stor[1:R]),  sd(vdiff_rel_stor[1:R]))))
+cat(sprintf("  %-22s  %s  %s  %s  %s  %s\n",
+            "Var Gram diff (k×k)",
+            fmt2(mean(gram_vdiff_L1_stor[1:R]),   sd(gram_vdiff_L1_stor[1:R])),
+            fmt2(mean(gram_vdiff_L2_stor[1:R]),   sd(gram_vdiff_L2_stor[1:R])),
+            fmt2(mean(gram_vdiff_max_stor[1:R]),  sd(gram_vdiff_max_stor[1:R])),
+            fmt2(mean(gram_vdiff_frob_stor[1:R]), sd(gram_vdiff_frob_stor[1:R])),
+            fmt2(mean(gram_vdiff_rel_stor[1:R]),  sd(gram_vdiff_rel_stor[1:R]))))
 cat("========================================================================\n")
+
+
+
+
+# =============================================================================
+# Simulation using FABLE mean
+# =============================================================================
+n = 500 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), nrow = n, ncol = k)
+  E <- matrix(rnorm(n * p), nrow = n, ncol = p)
+  E <- sweep(E, 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  svdmod  <- svd(Y)
+  U_Y     <- svdmod$u
+  V_Y     <- svdmod$v
+  svalsY  <- svdmod$d
+  
+  kEst        <- k
+  varInflation <- 1
+  
+  # ------------------------------------------------------------------
+  # FABLE (True k, tausq = infinity)
+  # ------------------------------------------------------------------
+  CPPSamplingOutput <- CPPFABLESampler(Y, gamma0, delta0sq, MC,
+                                       U_Y, V_Y, svalsY, kEst, varInflation)
+  
+  Lambda_FABLE <- matrix(colMeans(CPPSamplingOutput$LambdaSamples), nrow = p, ncol = k, byrow = TRUE)
+  Sigma_FABLE  <- as.numeric(CPPSamplingOutput$SigmaSqEstimatePostMean)
+  
+  # ------------------------------------------------------------------
+  # algorithm1_oracle 
+  # ------------------------------------------------------------------
+  res_oracle <- algorithm1_oracle(Y         = Y,
+                                  Lambda0   = Lambda_FABLE,
+                                  Sigma0    = Sigma_FABLE,
+                                  k         = kEst,
+                                  gamma0    = gamma0,
+                                  delta0_sq = delta0sq,
+                                  rhosq      = varInflation,
+                                  mcmc      = MC,
+                                  seed      = 2001 + r)
+  # res_oracle[[s]]$Psi_est : p × p
+  
+  # submatrix extraction
+  Psi_sub_arr <- array(
+    unlist(lapply(res_oracle, function(s) s$Psi_est[relevantIndices, relevantIndices])),
+    dim = c(pSub, pSub, MC)
+  )
+  
+  # quantile truncation
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub  <- Psi0[relevantIndices, relevantIndices]
+  trueVec      <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle   <- lowPsi_oracle[upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle  <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ]  <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r]  <- mean(highVec_oracle - lowVec_oracle)
+  
+  
+
+  
+  ## Save information
+  
+  #if(!is.na(dir.name)) {
+  #  
+  #  write.csv(covStor[r,], file = paste0(dir.name, "/", "coverage_rep=", r,  "_n=", n, "_p=", p, "_lambdasd=", lambdasd, "_k=", k, "_pi0=", pi0, ".csv"))
+  #  write.csv(widthStor[r], file = paste0(dir.name, "/", "width_rep=", r,  "_n=", n, "_p=", p, "_lambdasd=", lambdasd, "_k=", k, "_pi0=", pi0, ".csv"))
+  #  write.csv(mean(covStor[r,]), file = paste0(dir.name, "/", "avg_coverage_rep=", r,  "_n=", n, "_p=", p, "_lambdasd=", lambdasd, "_k=", k, "_pi0=", pi0, ".csv"))
+  #  
+  #}
+  
+  # =============================================================
+  # Result aggregation
+  # =============================================================
+
+  cat("=== Oracle ===\n")
+  cat("avg coverage:", round(mean(covStor_oracle[1:r, ]), 3),
+      " avg width:", round(mean(widthStor_oracle[1:r]), 3), "\n")
+
+  
+}# end of replication
+
+# =============================================================
+# ================== Result Summary ===========================
+# =============================================================
+summarize_simulation <- function(
+                                 covStor_oracle, widthStor_oracle,
+                                 R, n, p) { 
+  fmt <- function(x) {
+    q <- quantile(x, probs = c(0.025, 0.975))
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
+  }
+  
+  methods <- list(
+    list(label = "Algorithm1_Oracle", cov = rowMeans(covStor_oracle[1:R, ]), width = widthStor_oracle[1:R])
+  )
+  
+  cat("=================================================================\n")
+  cat(sprintf("  R = %d replications (n=%d, p=%d)\n", R, n, p)) 
+  cat("=================================================================\n")
+  cat(sprintf("  %-20s %-30s %s\n", "Method", "Coverage", "Width"))
+  cat("-----------------------------------------------------------------\n")
+  for (m in methods) {
+    cat(sprintf("  %-20s %-30s %s\n", m$label, fmt(m$cov), fmt(m$width)))
+  }
+  cat("=================================================================\n")
+}
+summarize_simulation(
+                     covStor_oracle, widthStor_oracle,
+                     R = R, n = n, p = p)
+
+
+
+
+# =============================================================================
+# Simulation using FABLE samples per iteration
+# =============================================================================
+n = 500 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), n, k)
+  E <- sweep(matrix(rnorm(n * p), n, p), 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  svdmod <- svd(Y)
+  U_Y <- svdmod$u
+  V_Y <- svdmod$v
+  svalsY <- svdmod$d
+  kEst <- k
+  varInflation <- 1
+  
+  CPPSamplingOutput <- CPPFABLESampler(Y, gamma0, delta0sq, MC,
+                                       U_Y, V_Y, svalsY, kEst, varInflation)
+  
+  LambdaDraws <- CPPSamplingOutput$LambdaSamples  # MC x (k*p)
+  SigmaDraws  <- CPPSamplingOutput$SigmaSqSamples # MC x p
+  
+  Psi_sub_arr <- array(0, dim = c(pSub, pSub, MC))
+  
+  for (m in seq_len(MC)) {
+    Lambda_m <- matrix(LambdaDraws[m, ], nrow = p, ncol = k, byrow = TRUE)
+    Sigma_m  <- as.numeric(SigmaDraws[m, ])
+    
+    res_m <- algorithm1_oracle(Y         = Y,
+                               Lambda0   = Lambda_m,
+                               Sigma0    = Sigma_m,
+                               k         = kEst,
+                               gamma0    = gamma0,
+                               delta0_sq = delta0sq,
+                               rhosq      = varInflation,   
+                               mcmc      = 1,
+                               seed      = 2001 + r + m)   # for each draw
+    
+    Psi_sub_arr[, , m] <- res_m[[1]]$Psi_est[relevantIndices, relevantIndices]
+  }
+  
+  # ---- 분위수 절단 ----
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub <- Psi0[relevantIndices, relevantIndices]
+  trueVec     <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle  <- lowPsi_oracle [upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ] <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r] <- mean(highVec_oracle - lowVec_oracle)
+}
+
+# =============================================================
+# ================== Result Summary ===========================
+# =============================================================
+summarize_simulation <- function(
+    covStor_oracle, widthStor_oracle,
+    R, n, p) { 
+  fmt <- function(x) {
+    q <- quantile(x, probs = c(0.025, 0.975))
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
+  }
+  
+  methods <- list(
+    list(label = "Algorithm1_Oracle", cov = rowMeans(covStor_oracle[1:R, ]), width = widthStor_oracle[1:R])
+  )
+  
+  cat("=================================================================\n")
+  cat(sprintf("  R = %d replications (n=%d, p=%d)\n", R, n, p)) 
+  cat("=================================================================\n")
+  cat(sprintf("  %-20s %-30s %s\n", "Method", "Coverage", "Width"))
+  cat("-----------------------------------------------------------------\n")
+  for (m in methods) {
+    cat(sprintf("  %-20s %-30s %s\n", m$label, fmt(m$cov), fmt(m$width)))
+  }
+  cat("=================================================================\n")
+}
+summarize_simulation(
+  covStor_oracle, widthStor_oracle,
+  R = R, n = n, p = p)
+
+
+
+
+
+
+# =============================================================================
+# Simulation using FABLE posterior mean and var inflation
+# =============================================================================
+n = 1000 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), nrow = n, ncol = k)
+  E <- matrix(rnorm(n * p), nrow = n, ncol = p)
+  E <- sweep(E, 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  svdmod  <- svd(Y)
+  U_Y     <- svdmod$u
+  V_Y     <- svdmod$v
+  svalsY  <- svdmod$d
+  
+  kEst        <- k
+  # varInflation <- 1
+  FABLEHypPars = FABLEHyperParameters(Y, U_Y, V_Y, svalsY, kEst)
+  covCorrectEntries = CPPcov_correct_matrix(FABLEHypPars$SigmaSqEstimate,
+                                            FABLEHypPars$G)
+  varInflation = mean(covCorrectEntries)^2
+  
+  # ------------------------------------------------------------------
+  # FABLE (True k, tausq = infinity)
+  # ------------------------------------------------------------------
+  CPPSamplingOutput <- CPPFABLESampler(Y, gamma0, delta0sq, MC,
+                                       U_Y, V_Y, svalsY, kEst, varInflation)
+  
+  Lambda_FABLE <- matrix(colMeans(CPPSamplingOutput$LambdaSamples), nrow = p, ncol = k, byrow = TRUE)
+  Sigma_FABLE  <- as.numeric(CPPSamplingOutput$SigmaSqEstimatePostMean)
+  
+  # ------------------------------------------------------------------
+  # algorithm1_oracle 
+  # ------------------------------------------------------------------
+  res_oracle <- algorithm1_oracle(Y         = Y,
+                                  Lambda0   = Lambda_FABLE,
+                                  Sigma0    = Sigma_FABLE,
+                                  k         = kEst,
+                                  gamma0    = gamma0,
+                                  delta0_sq = delta0sq,
+                                  rhosq      = varInflation,
+                                  mcmc      = MC,
+                                  seed      = 2001 + r)
+  # res_oracle[[s]]$Psi_est : p × p
+  
+  # submatrix extraction
+  Psi_sub_arr <- array(
+    unlist(lapply(res_oracle, function(s) s$Psi_est[relevantIndices, relevantIndices])),
+    dim = c(pSub, pSub, MC)
+  )
+  
+  # quantile truncation
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub  <- Psi0[relevantIndices, relevantIndices]
+  trueVec      <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle   <- lowPsi_oracle[upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle  <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ]  <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r]  <- mean(highVec_oracle - lowVec_oracle)
+  
+  
+  
+  
+  ## Save information
+  
+  #if(!is.na(dir.name)) {
+  #  
+  #  write.csv(covStor[r,], file = paste0(dir.name, "/", "coverage_rep=", r,  "_n=", n, "_p=", p, "_lambdasd=", lambdasd, "_k=", k, "_pi0=", pi0, ".csv"))
+  #  write.csv(widthStor[r], file = paste0(dir.name, "/", "width_rep=", r,  "_n=", n, "_p=", p, "_lambdasd=", lambdasd, "_k=", k, "_pi0=", pi0, ".csv"))
+  #  write.csv(mean(covStor[r,]), file = paste0(dir.name, "/", "avg_coverage_rep=", r,  "_n=", n, "_p=", p, "_lambdasd=", lambdasd, "_k=", k, "_pi0=", pi0, ".csv"))
+  #  
+  #}
+  
+  # =============================================================
+  # Result aggregation
+  # =============================================================
+  
+  cat("=== Oracle ===\n")
+  cat("avg coverage:", round(mean(covStor_oracle[1:r, ]), 3),
+      " avg width:", round(mean(widthStor_oracle[1:r]), 3), "\n")
+  
+  
+}# end of replication
+
+# =============================================================
+# ================== Result Summary ===========================
+# =============================================================
+summarize_simulation <- function(
+    covStor_oracle, widthStor_oracle,
+    R, n, p) { 
+  fmt <- function(x) {
+    q <- quantile(x, probs = c(0.025, 0.975))
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
+  }
+  
+  methods <- list(
+    list(label = "Algorithm1_Oracle", cov = rowMeans(covStor_oracle[1:R, ]), width = widthStor_oracle[1:R])
+  )
+  
+  cat("=================================================================\n")
+  cat(sprintf("  R = %d replications (n=%d, p=%d)\n", R, n, p)) 
+  cat("=================================================================\n")
+  cat(sprintf("  %-20s %-30s %s\n", "Method", "Coverage", "Width"))
+  cat("-----------------------------------------------------------------\n")
+  for (m in methods) {
+    cat(sprintf("  %-20s %-30s %s\n", m$label, fmt(m$cov), fmt(m$width)))
+  }
+  cat("=================================================================\n")
+}
+summarize_simulation(
+  covStor_oracle, widthStor_oracle,
+  R = R, n = n, p = p)
+
+
+
+
+
+
+
+
+
+# =============================================================================
+# Simulation using FABLE samples and var inflation
+# =============================================================================
+n = 1000 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), n, k)
+  E <- sweep(matrix(rnorm(n * p), n, p), 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  svdmod <- svd(Y)
+  U_Y <- svdmod$u
+  V_Y <- svdmod$v
+  svalsY <- svdmod$d
+  kEst <- k
+  # varInflation <- 1
+  
+  FABLEHypPars = FABLEHyperParameters(Y, U_Y, V_Y, svalsY, kEst)
+  covCorrectEntries = CPPcov_correct_matrix(FABLEHypPars$SigmaSqEstimate,
+                                            FABLEHypPars$G)
+  varInflation = mean(covCorrectEntries)^2
+  
+  CPPSamplingOutput <- CPPFABLESampler(Y, gamma0, delta0sq, MC,
+                                       U_Y, V_Y, svalsY, kEst, varInflation)
+  
+  LambdaDraws <- CPPSamplingOutput$LambdaSamples  # MC x (k*p)
+  SigmaDraws  <- CPPSamplingOutput$SigmaSqSamples # MC x p
+  
+  Psi_sub_arr <- array(0, dim = c(pSub, pSub, MC))
+  
+  for (m in seq_len(MC)) {
+    Lambda_m <- matrix(LambdaDraws[m, ], nrow = p, ncol = k, byrow = TRUE)
+    Sigma_m  <- as.numeric(SigmaDraws[m, ])
+    
+    res_m <- algorithm1_oracle(Y         = Y,
+                               Lambda0   = Lambda_m,
+                               Sigma0    = Sigma_m,
+                               k         = kEst,
+                               gamma0    = gamma0,
+                               delta0_sq = delta0sq,
+                               rhosq      = varInflation,   
+                               mcmc      = 1,
+                               seed      = 2001 + r + m)   # for each draw
+    
+    Psi_sub_arr[, , m] <- res_m[[1]]$Psi_est[relevantIndices, relevantIndices]
+  }
+  
+  # ---- 분위수 절단 ----
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub <- Psi0[relevantIndices, relevantIndices]
+  trueVec     <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle  <- lowPsi_oracle [upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ] <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r] <- mean(highVec_oracle - lowVec_oracle)
+}
+
+# =============================================================
+# ================== Result Summary ===========================
+# =============================================================
+summarize_simulation <- function(
+    covStor_oracle, widthStor_oracle,
+    R, n, p) { 
+  fmt <- function(x) {
+    q <- quantile(x, probs = c(0.025, 0.975))
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
+  }
+  
+  methods <- list(
+    list(label = "Algorithm1_Oracle", cov = rowMeans(covStor_oracle[1:R, ]), width = widthStor_oracle[1:R])
+  )
+  
+  cat("=================================================================\n")
+  cat(sprintf("  R = %d replications (n=%d, p=%d)\n", R, n, p)) 
+  cat("=================================================================\n")
+  cat(sprintf("  %-20s %-30s %s\n", "Method", "Coverage", "Width"))
+  cat("-----------------------------------------------------------------\n")
+  for (m in methods) {
+    cat(sprintf("  %-20s %-30s %s\n", m$label, fmt(m$cov), fmt(m$width)))
+  }
+  cat("=================================================================\n")
+}
+summarize_simulation(
+  covStor_oracle, widthStor_oracle,
+  R = R, n = n, p = p)
+
+
+
+
+
+
+# =============================================================================
+# Simulation using fad package
+# =============================================================================
+library(fad)
+n = 500 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), n, k)
+  E <- sweep(matrix(rnorm(n * p), n, p), 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  kEst        <- k
+  varInflation <- 1
+  
+  # ------------------------------------------------------------------
+  # fad MLE corr -> cov scale adjust
+  # ------------------------------------------------------------------
+  fit <- fad::fad(Y, factors = kEst, rotation = "none")
+  
+  Lc <- unclass(fit$loadings)        # p x k
+  u  <- fit$uniquenesses             # p 
+  s  <- fit$sd                       # p
+  
+  Lambda_FAD <- s * Lc               # S %*% Lc 
+  Sigma_FAD  <- as.numeric(s^2 * u)  # sigma^2_j = sd_j^2 * u_j
+  
+  # ------------------------------------------------------------------
+  # algorithm1_oracle
+  # ------------------------------------------------------------------
+  res_oracle <- algorithm1_oracle(Y         = Y,
+                                  Lambda0   = Lambda_FAD,
+                                  Sigma0    = Sigma_FAD,
+                                  k         = kEst,
+                                  gamma0    = gamma0,
+                                  delta0_sq = delta0sq,
+                                  rhosq     = varInflation,
+                                  mcmc      = MC,
+                                  seed      = 2001 + r)
+  
+  # submatrix extraction
+  Psi_sub_arr <- array(
+    unlist(lapply(res_oracle, function(z) z$Psi_est[relevantIndices, relevantIndices])),
+    dim = c(pSub, pSub, MC)
+  )
+  
+  # quantile truncation
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub    <- Psi0[relevantIndices, relevantIndices]
+  trueVec        <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle  <- lowPsi_oracle [upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ] <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r] <- mean(highVec_oracle - lowVec_oracle)
+}
+summarize_simulation <- function(
+    covStor_oracle, widthStor_oracle,
+    R, n, p) { 
+  fmt <- function(x) {
+    q <- quantile(x, probs = c(0.025, 0.975))
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
+  }
+  
+  methods <- list(
+    list(label = "Algorithm1_Oracle", cov = rowMeans(covStor_oracle[1:R, ]), width = widthStor_oracle[1:R])
+  )
+  
+  cat("=================================================================\n")
+  cat(sprintf("  R = %d replications (n=%d, p=%d)\n", R, n, p)) 
+  cat("=================================================================\n")
+  cat(sprintf("  %-20s %-30s %s\n", "Method", "Coverage", "Width"))
+  cat("-----------------------------------------------------------------\n")
+  for (m in methods) {
+    cat(sprintf("  %-20s %-30s %s\n", m$label, fmt(m$cov), fmt(m$width)))
+  }
+  cat("=================================================================\n")
+}
+summarize_simulation(
+  covStor_oracle, widthStor_oracle,
+  R = R, n = n, p = p)
+
+
+
+# =============================================================================
+# Simulation using psych package
+# =============================================================================
+library(psych)
+n = 500 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), n, k)
+  E <- sweep(matrix(rnorm(n * p), n, p), 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  kEst        <- k
+  varInflation <- 1
+  
+  fit <- psych::fa(#r  = cov(Y)+ 1e-2 * diag(p),
+            cov(Y),
+            nfactors = kEst,
+            rotate   = "none",
+            covar    = TRUE,             # Covariance
+            n.obs    = n,
+            fm       = "minres",  # minres, uls, wls, pa, ml
+            scores   = "none")
+  
+  Lambda_FA <- unclass(fit$loadings)          # p x k
+  Sigma_FA  <- as.numeric(fit$uniquenesses)   # p
+  
+  # ------------------------------------------------------------------
+  # algorithm1_oracle
+  # ------------------------------------------------------------------
+  res_oracle <- algorithm1_oracle(Y         = Y,
+                                  Lambda0   = Lambda_FA,
+                                  Sigma0    = Sigma_FA,
+                                  k         = kEst,
+                                  gamma0    = gamma0,
+                                  delta0_sq = delta0sq,
+                                  rhosq      = varInflation,
+                                  mcmc      = MC,
+                                  seed      = 2001 + r)
+  
+  Psi_sub_arr <- array(
+    unlist(lapply(res_oracle, function(z) z$Psi_est[relevantIndices, relevantIndices])),
+    dim = c(pSub, pSub, MC)
+  )
+  
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub    <- Psi0[relevantIndices, relevantIndices]
+  trueVec        <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle  <- lowPsi_oracle [upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ] <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r] <- mean(highVec_oracle - lowVec_oracle)
+}
+summarize_simulation <- function(
+    covStor_oracle, widthStor_oracle,
+    R, n, p) { 
+  fmt <- function(x) {
+    q <- quantile(x, probs = c(0.025, 0.975))
+    sprintf("%.3f [%.3f, %.3f]", mean(x), q[1], q[2])
+  }
+  
+  methods <- list(
+    list(label = "Algorithm1_Oracle", cov = rowMeans(covStor_oracle[1:R, ]), width = widthStor_oracle[1:R])
+  )
+  
+  cat("=================================================================\n")
+  cat(sprintf("  R = %d replications (n=%d, p=%d)\n", R, n, p)) 
+  cat("=================================================================\n")
+  cat(sprintf("  %-20s %-30s %s\n", "Method", "Coverage", "Width"))
+  cat("-----------------------------------------------------------------\n")
+  for (m in methods) {
+    cat(sprintf("  %-20s %-30s %s\n", m$label, fmt(m$cov), fmt(m$width)))
+  }
+  cat("=================================================================\n")
+}
+summarize_simulation(
+  covStor_oracle, widthStor_oracle,
+  R = R, n = n, p = p)
+
+
+
+
+# =============================================================================
+# Simulation using POET package; Sigma is not diagonal matrix
+# =============================================================================
+algorithm1_oracle_offdiag <- function(Y, Lambda0, Sigma0, k,
+                              gamma0 = 1, delta0_sq = 1, rhosq = 1,
+                              mcmc = 1, seed = 1) {
+  set.seed(seed)
+  n <- nrow(Y); p <- ncol(Y)
+  
+  samples <- vector("list", mcmc)
+  
+  # tilde F
+  LtSinv  <- t(Lambda0) %*% solve(Sigma0)  # Lambda^t Sigma^{-1} = t(Lambda0) %*% solve(diag(Sigma0))
+  A0      <- diag(k) + LtSinv %*% Lambda0  #I_k + Lamdba^t Sigma^{-1} Lambda  
+  A0_inv  <- solve(A0)
+  M_mat   <- A0_inv %*% LtSinv # A^{-1} Lambda^t Sigma^{-1}
+  F_post_mean <- Y %*% t(M_mat)
+  
+  for (s in seq_len(mcmc)) {
+    F_tilde <- matrix(0, n, k)
+    for (i in seq_len(n)) {
+      mu_i         <- M_mat %*% Y[i, ]
+      F_tilde[i, ] <- MASS::mvrnorm(1, mu = mu_i, Sigma = A0_inv)
+    }
+    
+    # Lambda and sigmasq
+    K    <- solve(crossprod(F_tilde))
+    Fty  <- crossprod(F_tilde, Y)
+    Mu   <- K %*% Fty
+    Kinv <- solve(K)
+    
+    gn    <- gamma0 + n
+    gn_d2 <- numeric(p)
+    for (j in seq_len(p)) {
+      gn_d2[j] <- gamma0 * delta0_sq + sum(Y[, j]^2) -
+        as.numeric(t(Mu[, j]) %*% Kinv %*% Mu[, j])
+    }
+    
+    sigma2 <- numeric(p)
+    for (j in seq_len(p)) {
+      sigma2[j] <- 1 / rgamma(1, shape = gn / 2, rate = gn_d2[j] / 2)
+    }
+    
+    Lambda_samp <- matrix(0, p, k)
+    for (j in seq_len(p)) {
+      Lambda_samp[j, ] <- MASS::mvrnorm(1, mu = Mu[, j], Sigma = rhosq * sigma2[j] * K)
+    }
+    
+    # aggregate
+    Psi <- tcrossprod(Lambda_samp) + diag(sigma2)
+    
+    samples[[s]] <- list(F_tilde = F_tilde, F_post_mean = F_post_mean, Lambda_est = Lambda_samp,
+                         Sigma_est = diag(sigma2), Psi_est = Psi)
+  }
+  
+  samples
+}
+
+library(POET)
+n = 500 # 500, 1000
+p = 500 # 500, 1000
+pi0 = 0.5
+alpha = 0.05
+
+
+lambdasd = 0.5
+#relevantIndices = c(1:100)
+
+# dir.name = NA #set directory to save
+# if(!is.na(dir.name)) {dir.create(dir.name)}
+
+set.seed(1) #set the seed here
+
+relevantIndices = sample(1:p, size = 100, replace = FALSE)
+pSub = length(relevantIndices)
+
+
+k = 10
+
+R = 10
+
+# Sample storage 
+covStor_oracle   <- matrix(0, nrow = R, ncol = pSub * (pSub + 1) / 2) 
+widthStor_oracle <- rep(0, R) 
+
+
+
+
+Lambda = matrix(rnorm(p*k, mean = 0, sd = lambdasd), nrow = p, ncol = k)
+BinMat = matrix(rbinom(p*k, 1, 1-pi0), nrow = p, ncol = k) #pi0 = P(zero)
+Lambda = Lambda * BinMat
+
+Sigma0 = runif(p, 0.5, 5)
+
+gamma0 = 1
+delta0sq = 1  
+MC = 1000
+Psi0 = Matrix::tcrossprod(Lambda) + diag(Sigma0)  # True cov.
+
+r = 1
+
+for (r in 1:R) {
+  
+  print(paste0("Replicate: ", r))
+  set.seed(2001 + r)
+  
+  M <- matrix(rnorm(n * k), n, k)
+  E <- sweep(matrix(rnorm(n * p), n, p), 2, sqrt(Sigma0), "*")
+  Y <- (M %*% t(Lambda)) + E
+  
+  kEst        <- k
+  varInflation <- 1
+  
+  # ------------------------------------------------------------------
+  # POET: full Sigma_u
+  # ------------------------------------------------------------------
+  Yc      <- scale(Y, center = TRUE, scale = FALSE)      
+  Cmin    <- POET::POETCmin(t(Yc), kEst, "soft", "vad")        # p.d
+  poetOut <- POET::POET(t(Yc), K = kEst, C = max(0.5, Cmin + 0.1),
+                  thres = "soft", matrix = "vad")
+  
+  Lambda_POET <- poetOut$loadings                        # p x k
+  Sigma_POET  <- poetOut$SigmaU 
+  
+  res_oracle <- algorithm1_oracle_offdiag(Y         = Y,
+                                          Lambda0   = Lambda_POET,
+                                          Sigma0    = Sigma_POET,
+                                          k         = kEst,
+                                          gamma0    = gamma0,
+                                          delta0_sq = delta0sq,
+                                          rhosq     = varInflation,
+                                          mcmc      = MC,
+                                          seed      = 2001 + r)
+  
+  Psi_sub_arr <- array(
+    unlist(lapply(res_oracle, function(z) z$Psi_est[relevantIndices, relevantIndices])),
+    dim = c(pSub, pSub, MC)
+  )
+  
+  lowPsi_oracle  <- apply(Psi_sub_arr, c(1, 2), quantile, probs = alpha / 2)
+  highPsi_oracle <- apply(Psi_sub_arr, c(1, 2), quantile, probs = 1 - alpha / 2)
+  
+  truePsi0Sub    <- Psi0[relevantIndices, relevantIndices]
+  trueVec        <- truePsi0Sub[upper.tri(truePsi0Sub, diag = TRUE)]
+  lowVec_oracle  <- lowPsi_oracle [upper.tri(lowPsi_oracle,  diag = TRUE)]
+  highVec_oracle <- highPsi_oracle[upper.tri(highPsi_oracle, diag = TRUE)]
+  
+  covStor_oracle[r, ] <- as.numeric((lowVec_oracle <= trueVec) & (trueVec <= highVec_oracle))
+  widthStor_oracle[r] <- mean(highVec_oracle - lowVec_oracle)
+}
+summarize_simulation(
+  covStor_oracle, widthStor_oracle,
+  R = R, n = n, p = p)
